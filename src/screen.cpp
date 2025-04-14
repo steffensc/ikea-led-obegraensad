@@ -254,9 +254,28 @@ ICACHE_RAM_ATTR void Screen_::_render()
 
   counter += (256 / GRAY_LEVELS);
 
-  digitalWrite(PIN_LATCH, LOW);
-  SPI.writeBytes(bits, sizeof(spi_bits));
-  digitalWrite(PIN_LATCH, HIGH);
+  // Calculate checksum over buffer to detect if content has changed
+  unsigned long checksum = 0;
+  static unsigned long prev_checksum = 0;
+  
+  if (ENABLE_ALWAYS_REFRESH == false)
+  {
+    for (int idx = 0; idx < sizeof(spi_bits) / sizeof(spi_bits[0]); idx++)
+    {
+      checksum ^= spi_bits[idx];
+    }
+  }
+  
+  // Only update shift registers / LED output, when there is a change in the buffer
+  if (checksum != prev_checksum || ENABLE_ALWAYS_REFRESH) {
+    // Write buffer to shift registers for output on the LEDs
+    digitalWrite(PIN_LATCH, LOW);
+    SPI.writeBytes(bits, sizeof(spi_bits));
+    digitalWrite(PIN_LATCH, HIGH);
+
+    prev_checksum = checksum;
+  }
+
 #ifdef ESP8266
   timer1_write(100);
 #endif
