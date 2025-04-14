@@ -24,17 +24,8 @@ void BigClockPlugin::loop()
       std::vector<int> mm = {(timeinfo.tm_min - timeinfo.tm_min % 10) / 10, timeinfo.tm_min % 10};
       bool leadingZero = (hh.at(0) == 0);
       Screen.clear();
-      if (leadingZero)
-      {
-        hh.erase(hh.begin());
-        Screen.drawBigNumbers(COLS / 2, 0, hh);
-        Screen.drawBigNumbers(0, ROWS / 2, mm);
-      }
-      else
-      {
-        Screen.drawBigNumbers(0, 0, hh);
-        Screen.drawBigNumbers(0, ROWS / 2, mm);
-      }
+      Screen.drawBigNumbers(0, 0, hh);
+      Screen.drawBigNumbers(0, ROWS / 2, mm);
     }
 
     previousMinutes = timeinfo.tm_min;
