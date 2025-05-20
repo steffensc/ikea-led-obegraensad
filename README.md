@@ -302,6 +302,77 @@ curl http://your-server/api/data
 
 ---
 
+## Use HTTP API in Home Assistant
+
+Create a "virtual" entity / light to control the brightness in Home Assistant.
+
+- Add the following code to your `configuration.yaml`:
+  ```yaml
+  light:
+  - platform: template
+    lights:
+      obegraensad:
+        level_template: "{{ state_attr('input_number.set_obegraensad_brightness', 'value') | int }}"
+        turn_on:
+          service: rest_command.set_obegraensad_brightness
+          data:
+            value: 255
+        turn_off:
+          service: rest_command.set_obegraensad_brightness
+          data:
+            value: 0
+        set_level:
+          service: rest_command.set_obegraensad_brightness
+          data:
+            value: "{{ brightness | int }}"
+
+  rest_command:
+    set_obegraensad_brightness:
+      url: "http://192.168.178.68/api/brightness/"
+      method: PATCH
+      content_type: "application/x-www-form-urlencoded"
+      payload: "value={{ value }}"
+  ```
+
+---
+
+## Use HTTP API in Homeassistant
+
+Example configuration for an automation to sett / dim the brightness to low when the sun sets.
+
+- Add the following code to your `configuration.yaml`:
+  ```yaml
+  rest_command:
+    obegraensad_brightness_high:
+      url: "http://your-server/api/brightness/"
+      method: PATCH
+      content_type: "application/x-www-form-urlencoded"
+      payload: "value=100"
+    obegraensad_brightness_low:
+      url: "http://your-server/api/brightness/"
+      method: PATCH
+      content_type: "application/x-www-form-urlencoded"
+      payload: "value=1"
+  ```
+- Go to *Settings* --> *Automations* and create a new automation.
+- Select *Edit in YAML* and add the following content:
+  ```yaml
+  alias: Obegraensad low bightness
+  description: ""
+  triggers:
+    - trigger: sun
+      event: sunset
+      offset: 0
+  conditions: []
+  actions:
+    - action: rest_command.obegraensad_brightness_low
+      data: {}
+  mode: single
+  ```
+- To set the brightness back to bright, create e.g. another automation or a condition in which `rest_command.obegraensad_brightness_high` is called.
+
+---
+
 # Plugin Scheduler
 
 It is possible to switch between plugins automatically.  
