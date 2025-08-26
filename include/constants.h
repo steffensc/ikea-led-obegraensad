@@ -3,7 +3,7 @@
 // disable if you do not want to have online functionality
 #define ENABLE_SERVER
 
-#define ENABLE_ALWAYS_REFRESH false
+#define ENABLE_ALWAYS_REFRESH true
 
 #ifdef ESP32
 #define PIN_ENABLE 26

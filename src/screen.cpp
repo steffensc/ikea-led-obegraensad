@@ -33,16 +33,19 @@ void Screen_::setBrightness(uint8_t brightness, bool shouldStore)
 
 void Screen_::setRenderBuffer(const uint8_t *renderBuffer, bool grays)
 {
-  if (grays)
-  {
-    memcpy(renderBuffer_, renderBuffer, ROWS * COLS);
-  }
-  else
-  {
-    for (int i = 0; i < ROWS * COLS; i++)
+  if (xSemaphoreTake(bufferMutex, portMAX_DELAY) == pdTRUE) {
+    if (grays)
     {
-      renderBuffer_[i] = renderBuffer[i] * 255;
+      memcpy(renderBuffer_, renderBuffer, ROWS * COLS);
     }
+    else
+    {
+      for (int i = 0; i < ROWS * COLS; i++)
+      {
+        renderBuffer_[i] = renderBuffer[i] * 255;
+      }
+    }
+    xSemaphoreGive(bufferMutex);
   }
 }
 
@@ -143,6 +146,9 @@ void Screen_::persist()
 
 void Screen_::setup()
 {
+  // Initialize buffer mutex
+  bufferMutex = xSemaphoreCreateMutex();
+  
 #ifdef ENABLE_STORAGE
   storage.begin("led-wall", true);
   setBrightness(storage.getUInt("brightness", 255));
@@ -179,14 +185,22 @@ void Screen_::setPixelAtIndex(uint8_t index, uint8_t value, uint8_t brightness)
 {
   if (index >= COLS * ROWS)
     return;
-  renderBuffer_[index] = value <= 0 || brightness <= 0 ? 0 : (brightness > 255 ? 255 : brightness);
+    
+  if (xSemaphoreTake(bufferMutex, portMAX_DELAY) == pdTRUE) {
+    renderBuffer_[index] = value <= 0 || brightness <= 0 ? 0 : (brightness > 255 ? 255 : brightness);
+    xSemaphoreGive(bufferMutex);
+  }
 }
 
 void Screen_::setPixel(uint8_t x, uint8_t y, uint8_t value, uint8_t brightness)
 {
   if (x >= COLS || y >= ROWS)
     return;
-  renderBuffer_[y * COLS + x] = value <= 0 || brightness <= 0 ? 0 : (brightness > 255 ? 255 : brightness);
+    
+  if (xSemaphoreTake(bufferMutex, portMAX_DELAY) == pdTRUE) {
+    renderBuffer_[y * COLS + x] = value <= 0 || brightness <= 0 ? 0 : (brightness > 255 ? 255 : brightness);
+    xSemaphoreGive(bufferMutex);
+  }
 }
 
 void Screen_::setCurrentRotation(int rotation, bool shouldPersist)
@@ -238,42 +252,44 @@ void Screen_::onScreenTimer()
 
 ICACHE_RAM_ATTR void Screen_::_render()
 {
-  const auto buf = getRotatedRenderBuffer();
-
-  // SPI data needs to be 32-bit aligned, round up before divide
   static unsigned long spi_bits[(ROWS * COLS + 8 * sizeof(unsigned long) - 1) / 8 / sizeof(unsigned long)] = {0};
   unsigned char *bits = (unsigned char *)spi_bits;
-  memset(bits, 0, ROWS * COLS / 8);
-
   static unsigned char counter = 0;
-
-  for (int idx = 0; idx < ROWS * COLS; idx++)
-  {
-    bits[idx >> 3] |= (buf[positions[idx]] > counter ? 0x80 : 0) >> (idx & 7);
-  }
-
-  counter += (256 / GRAY_LEVELS);
-
-  // Calculate checksum over buffer to detect if content has changed
-  unsigned long checksum = 0;
-  static unsigned long prev_checksum = 0;
   
-  if (ENABLE_ALWAYS_REFRESH == false)
-  {
-    for (int idx = 0; idx < sizeof(spi_bits) / sizeof(spi_bits[0]); idx++)
+  // Nur während des Buffer-Zugriffs locken
+  if (xSemaphoreTake(bufferMutex, 0) == pdTRUE) {  // Verwende 0 statt portMAX_DELAY für non-blocking
+    const auto buf = getRotatedRenderBuffer();
+    memset(bits, 0, ROWS * COLS / 8);
+
+    for (int idx = 0; idx < ROWS * COLS; idx++)
     {
-      checksum ^= spi_bits[idx];
+      bits[idx >> 3] |= (buf[positions[idx]] > counter ? 0x80 : 0) >> (idx & 7);
     }
-  }
-  
-  // Only update shift registers / LED output, when there is a change in the buffer
-  if (checksum != prev_checksum || ENABLE_ALWAYS_REFRESH) {
-    // Write buffer to shift registers for output on the LEDs
-    digitalWrite(PIN_LATCH, LOW);
-    SPI.writeBytes(bits, sizeof(spi_bits));
-    digitalWrite(PIN_LATCH, HIGH);
+    xSemaphoreGive(bufferMutex);
+    
+    counter += (256 / GRAY_LEVELS);
 
-    prev_checksum = checksum;
+    // Calculate checksum over buffer to detect if content has changed
+    unsigned long checksum = 0;
+    static unsigned long prev_checksum = 0;
+    
+    if (ENABLE_ALWAYS_REFRESH == false)
+    {
+      for (int idx = 0; idx < sizeof(spi_bits) / sizeof(spi_bits[0]); idx++)
+      {
+        checksum ^= spi_bits[idx];
+      }
+    }
+    
+    // Only update shift registers / LED output, when there is a change in the buffer
+    if (checksum != prev_checksum || ENABLE_ALWAYS_REFRESH) {
+      // Write buffer to shift registers for output on the LEDs
+      digitalWrite(PIN_LATCH, LOW);
+      SPI.writeBytes(bits, sizeof(spi_bits));
+      digitalWrite(PIN_LATCH, HIGH);
+
+      prev_checksum = checksum;
+    }
   }
 
 #ifdef ESP8266
