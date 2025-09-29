@@ -192,7 +192,11 @@ TaskHandle_t screenDrawingTaskHandle = NULL;
 
 void screenDrawingTask(void *parameter)
 {
+  // Warte kurz, damit das System vollständig initialisiert ist
+  vTaskDelay(pdMS_TO_TICKS(100));
+  
   Screen.setup();
+  
   for (;;)
   {
     pluginManager.runActivePlugin();
@@ -208,9 +212,9 @@ void setup()
       "screenDrawingTask",
       10000,
       NULL,
-      1,
+      2,  // Task priority
       &screenDrawingTaskHandle,
-      0);
+      0); // Core
 }
 #endif
 #ifdef ESP8266
