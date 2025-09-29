@@ -18,7 +18,8 @@ void BigClockPlugin::loop()
 {
   if (getLocalTime(&timeinfo))
   {
-    if (previousHour != timeinfo.tm_hour || previousMinutes != timeinfo.tm_min)
+    // Dirty workaround / mitigation: Also Update every 5 seconds in case we have a missing number 
+    if (previousHour != timeinfo.tm_hour || previousMinutes != timeinfo.tm_min || timeinfo.tm_sec % 5 == 0)
     {
       std::vector<int> hh = {(timeinfo.tm_hour - timeinfo.tm_hour % 10) / 10, timeinfo.tm_hour % 10};
       std::vector<int> mm = {(timeinfo.tm_min - timeinfo.tm_min % 10) / 10, timeinfo.tm_min % 10};
@@ -28,8 +29,8 @@ void BigClockPlugin::loop()
       Screen.drawBigNumbers(0, ROWS / 2, mm);
     }
 
-    previousMinutes = timeinfo.tm_min;
-    previousHour = timeinfo.tm_hour;
+      previousMinutes = timeinfo.tm_min;
+      previousHour = timeinfo.tm_hour;
   }
 }
 
