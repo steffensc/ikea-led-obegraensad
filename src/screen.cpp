@@ -2,7 +2,7 @@
 #include <SPI.h>
 #include <algorithm>
 
-#define TIMER_INTERVAL_US 16667  // -> 60 Hz // orginal value 200
+#define TIMER_INTERVAL_US 1000 //16667  // -> 60 Hz // orginal value 200
 #define GRAY_LEVELS 64 // must be a power of two
 
 using namespace std;
@@ -32,20 +32,17 @@ void Screen_::setBrightness(uint8_t brightness, bool shouldStore)
 }
 
 void Screen_::setRenderBuffer(const uint8_t *renderBuffer, bool grays)
-{
-  if (xSemaphoreTake(bufferMutex, portMAX_DELAY) == pdTRUE) {
-    if (grays)
+{  
+  if (grays)
+  {
+    memcpy(renderBuffer_, renderBuffer, ROWS * COLS);
+  }
+  else
+  {
+    for (int i = 0; i < ROWS * COLS; i++)
     {
-      memcpy(renderBuffer_, renderBuffer, ROWS * COLS);
+      renderBuffer_[i] = renderBuffer[i] * 255;
     }
-    else
-    {
-      for (int i = 0; i < ROWS * COLS; i++)
-      {
-        renderBuffer_[i] = renderBuffer[i] * 255;
-      }
-    }
-    xSemaphoreGive(bufferMutex);
   }
 }
 
@@ -146,22 +143,20 @@ void Screen_::persist()
 
 void Screen_::setup()
 {
-  // Initialize buffer mutex
-  bufferMutex = xSemaphoreCreateMutex();
-  
-#ifdef ENABLE_STORAGE
-  storage.begin("led-wall", true);
-  setBrightness(storage.getUInt("brightness", 255));
-  Screen.setCurrentRotation(storage.getUInt("rotation", 0));
+#ifdef ESP32
+  // SPI setup
+  SPI.begin(PIN_CLOCK, 34, PIN_DATA, 25); // SCLK, MISO, MOSI, SS
+  SPI.beginTransaction(SPISettings(10000000, MSBFIRST, SPI_MODE0));
 
-  storage.end();
-#else
-  Screen.setCurrentRotation(0);
+  // Timer setup
+  hw_timer_t *Screen_timer = timerBegin(0, 80, true);
+  timerAttachInterrupt(Screen_timer, &onScreenTimer, true);
+  timerAlarmWrite(Screen_timer, TIMER_INTERVAL_US, true);
+  timerAlarmEnable(Screen_timer);
 #endif
 
-  // TODO find proper unused pins for MISO and SS
 #ifdef ESP8266
-  SPI.pins(PIN_CLOCK, 12, PIN_DATA, 15); // SCLK, MISO, MOSI, SS);
+  SPI.pins(PIN_CLOCK, 12, PIN_DATA, 15);
   SPI.begin();
   SPI.beginTransaction(SPISettings(10000000, MSBFIRST, SPI_MODE0));
 
@@ -170,14 +165,13 @@ void Screen_::setup()
   timer1_write(100);
 #endif
 
-#ifdef ESP32
-  SPI.begin(PIN_CLOCK, 34, PIN_DATA, 25); // SCLK, MISO, MOSI, SS
-  SPI.beginTransaction(SPISettings(10000000, MSBFIRST, SPI_MODE0));
-
-  hw_timer_t *Screen_timer = timerBegin(0, 80, true);
-  timerAttachInterrupt(Screen_timer, &onScreenTimer, true);
-  timerAlarmWrite(Screen_timer, TIMER_INTERVAL_US, true);
-  timerAlarmEnable(Screen_timer);
+#ifdef ENABLE_STORAGE
+  storage.begin("led-wall", true);
+  setBrightness(storage.getUInt("brightness", 255));
+  Screen.setCurrentRotation(storage.getUInt("rotation", 0));
+  storage.end();
+#else
+  Screen.setCurrentRotation(0);
 #endif
 }
 
@@ -186,10 +180,7 @@ void Screen_::setPixelAtIndex(uint8_t index, uint8_t value, uint8_t brightness)
   if (index >= COLS * ROWS)
     return;
     
-  if (xSemaphoreTake(bufferMutex, portMAX_DELAY) == pdTRUE) {
-    renderBuffer_[index] = value <= 0 || brightness <= 0 ? 0 : (brightness > 255 ? 255 : brightness);
-    xSemaphoreGive(bufferMutex);
-  }
+  renderBuffer_[index] = value <= 0 || brightness <= 0 ? 0 : (brightness > 255 ? 255 : brightness);
 }
 
 void Screen_::setPixel(uint8_t x, uint8_t y, uint8_t value, uint8_t brightness)
@@ -197,10 +188,7 @@ void Screen_::setPixel(uint8_t x, uint8_t y, uint8_t value, uint8_t brightness)
   if (x >= COLS || y >= ROWS)
     return;
     
-  if (xSemaphoreTake(bufferMutex, portMAX_DELAY) == pdTRUE) {
-    renderBuffer_[y * COLS + x] = value <= 0 || brightness <= 0 ? 0 : (brightness > 255 ? 255 : brightness);
-    xSemaphoreGive(bufferMutex);
-  }
+  renderBuffer_[y * COLS + x] = value <= 0 || brightness <= 0 ? 0 : (brightness > 255 ? 255 : brightness);
 }
 
 void Screen_::setCurrentRotation(int rotation, bool shouldPersist)
@@ -252,22 +240,24 @@ void Screen_::onScreenTimer()
 
 ICACHE_RAM_ATTR void Screen_::_render()
 {
+  if (isDrawing_ == true)
+  {
+    return;
+  }
+
   static unsigned long spi_bits[(ROWS * COLS + 8 * sizeof(unsigned long) - 1) / 8 / sizeof(unsigned long)] = {0};
   unsigned char *bits = (unsigned char *)spi_bits;
   static unsigned char counter = 0;
   
-  // Nur während des Buffer-Zugriffs locken
-  if (xSemaphoreTake(bufferMutex, 0) == pdTRUE) {  // Verwende 0 statt portMAX_DELAY für non-blocking
-    const auto buf = getRotatedRenderBuffer();
-    memset(bits, 0, ROWS * COLS / 8);
+  const auto buf = getRotatedRenderBuffer();
+  memset(bits, 0, ROWS * COLS / 8);
 
-    for (int idx = 0; idx < ROWS * COLS; idx++)
-    {
-      bits[idx >> 3] |= (buf[positions[idx]] > counter ? 0x80 : 0) >> (idx & 7);
-    }
-    xSemaphoreGive(bufferMutex);
-    
-    counter += (256 / GRAY_LEVELS);
+  for (int idx = 0; idx < ROWS * COLS; idx++)
+  {
+    bits[idx >> 3] |= (buf[positions[idx]] > counter ? 0x80 : 0) >> (idx & 7);
+  }
+  
+  counter += (256 / GRAY_LEVELS);
 
     // Calculate checksum over buffer to detect if content has changed
     unsigned long checksum = 0;
@@ -290,7 +280,6 @@ ICACHE_RAM_ATTR void Screen_::_render()
 
       prev_checksum = checksum;
     }
-  }
 
 #ifdef ESP8266
   timer1_write(100);
@@ -375,23 +364,29 @@ std::vector<int> Screen_::readBytes(std::vector<int> bytes)
 
 void Screen_::drawNumbers(int x, int y, std::vector<int> numbers, uint8_t brightness)
 {
+  isDrawing_ = true;
   for (int i = 0; i < numbers.size(); i++)
   {
     drawCharacter(x + (i * 5), y, readBytes(smallNumbers[numbers.at(i)]), 4, brightness);
   }
+  isDrawing_ = false;
 }
 
 void Screen_::drawBigNumbers(int x, int y, std::vector<int> numbers, uint8_t brightness)
 {
+  isDrawing_ = true;
   for (int i = 0; i < numbers.size(); i++)
   {
     drawCharacter(x + (i * 8), y, readBytes(bigNumbers[numbers.at(i)]), 8, brightness);
   }
+  isDrawing_ = false;
 }
 
 void Screen_::drawWeather(int x, int y, int weather, uint8_t brightness)
 {
+  isDrawing_ = true;
   drawCharacter(x, y, readBytes(weatherIcons[weather]), 16, brightness);
+  isDrawing_ = false;
 }
 
 void Screen_::scrollText(std::string text, int delayTime, uint8_t brightness, uint8_t fontid)
